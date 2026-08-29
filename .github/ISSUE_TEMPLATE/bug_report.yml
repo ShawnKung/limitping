@@ -1,0 +1,43 @@
+name: Bug report
+description: 报告可复现的问题
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交 auth.json、token、account ID、私有 endpoint 或未脱敏日志。
+  - type: input
+    id: version
+    attributes:
+      label: limitping 版本
+      placeholder: limitping version
+    validations:
+      required: true
+  - type: input
+    id: codex-version
+    attributes:
+      label: Codex CLI 版本
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为（请脱敏）
+    validations:
+      required: true
