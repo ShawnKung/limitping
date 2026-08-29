@@ -100,6 +100,7 @@ codex (plus)
 limitping status
 limitping status --json
 limitping version
+limitping update
 limitping ping --dry-run
 limitping ping
 limitping ping --if-5h-full
@@ -249,6 +250,8 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.shawnkung.li
 - 用量接口返回 401 时，工具可能使用 refresh token 刷新登录，并以 `0600` 权限原子更新
   `auth.json`。
 - `--dry-run` 不调用 `codex exec`，也不向 Pushgateway 发送请求。
+- `limitping update` 只从本仓库的 GitHub Release 下载更新，校验同一 Release 中声明的
+  SHA-256 后才会原子替换当前可执行文件。
 - 报告安全问题时，请勿在公开 issue 中粘贴 `auth.json`、token 或完整调试日志。
 
 ## 开发
@@ -268,7 +271,7 @@ git push origin v0.1.0
 ```
 
 Release workflow 会把 tag 注入版本号、把 tag 对应的 Git commit 注入构建信息，并生成
-以下四种发布包及 `checksums.txt`：
+以下四个裸二进制及 `checksums.txt`：
 
 - macOS amd64
 - macOS arm64
@@ -282,6 +285,16 @@ $ limitping version
 limitping 0.1.0
 commit: 0123456789abcdef0123456789abcdef01234567
 ```
+
+已通过 Release 安装的版本可以自更新：
+
+```sh
+limitping update
+```
+
+命令会查询最新 GitHub Release；发现更高版本时，下载当前 OS/架构对应的裸二进制，
+校验 `checksums.txt` 中的 SHA-256，并在原安装路径原子替换当前程序。源码快照或开发构建
+没有标准语义版本号，不能使用自动更新。
 
 提交规范与安全报告方式见 [CONTRIBUTING.md](CONTRIBUTING.md) 和
 [SECURITY.md](SECURITY.md)。

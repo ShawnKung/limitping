@@ -59,7 +59,7 @@ func TestCobraHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"可用命令:", "status, s, stat", "ping, p", "--help"} {
+	for _, want := range []string{"可用命令:", "status, s, stat", "ping, p", "update", "--help"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("help missing %q:\n%s", want, got)
 		}

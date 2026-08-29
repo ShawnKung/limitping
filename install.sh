@@ -11,7 +11,6 @@ fail() {
 }
 
 command -v curl >/dev/null 2>&1 || fail "需要 curl"
-command -v tar >/dev/null 2>&1 || fail "需要 tar"
 
 case "$(uname -s)" in
     Darwin) os="darwin" ;;
@@ -34,7 +33,7 @@ case "$tag" in
 esac
 
 version=${tag#v}
-archive="limitping_${version}_${os}_${arch}.tar.gz"
+binary_name="limitping_${version}_${os}_${arch}"
 download_base="https://github.com/${repository}/releases/download/${tag}"
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/limitping.XXXXXXXX")
 
@@ -45,11 +44,11 @@ trap cleanup 0
 trap 'exit 1' HUP INT TERM
 
 printf '正在下载 limitping %s (%s/%s)...\n' "$version" "$os" "$arch"
-curl -fsSL "${download_base}/${archive}" -o "${tmp_dir}/${archive}"
 curl -fsSL "${download_base}/checksums.txt" -o "${tmp_dir}/checksums.txt"
+curl -fsSL "${download_base}/${binary_name}" -o "${tmp_dir}/${binary_name}"
 
-expected=$(awk -v name="$archive" '$2 == name { print; exit }' "${tmp_dir}/checksums.txt")
-[ -n "$expected" ] || fail "checksums.txt 中没有 ${archive}"
+expected=$(awk -v name="$binary_name" '$2 == name { print; exit }' "${tmp_dir}/checksums.txt")
+[ -n "$expected" ] || fail "checksums.txt 中没有 ${binary_name}"
 printf '%s\n' "$expected" >"${tmp_dir}/expected-checksum.txt"
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -60,9 +59,8 @@ else
     fail "需要 sha256sum 或 shasum 校验下载文件"
 fi
 
-tar -xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
-binary="${tmp_dir}/limitping_${version}_${os}_${arch}/limitping"
-[ -f "$binary" ] || fail "发布包中没有 limitping 二进制"
+binary="${tmp_dir}/${binary_name}"
+[ -f "$binary" ] || fail "Release 中没有 ${binary_name}"
 
 mkdir -p "$install_dir"
 install -m 0755 "$binary" "${install_dir}/limitping"

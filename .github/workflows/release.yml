@@ -17,7 +17,7 @@ jobs:
         with:
           go-version: stable
           cache: true
-      - name: Build archives
+      - name: Build binaries
         run: |
           set -eu
           version=${GITHUB_REF_NAME#v}
@@ -26,18 +26,15 @@ jobs:
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             os=${target%/*}
             arch=${target#*/}
-            archive=limitping_${version}_${os}_${arch}
-            mkdir -p "dist/$archive"
+            binary=limitping_${version}_${os}_${arch}
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build \
               -trimpath \
               -ldflags "-s -w -X github.com/ShawnKung/limitping/internal/cli.version=$version -X github.com/ShawnKung/limitping/internal/cli.commit=$commit" \
-              -o "dist/$archive/limitping" ./cmd/limitping
-            cp LICENSE README.md THIRD_PARTY_NOTICES.md "dist/$archive/"
-            tar -C dist -czf "dist/$archive.tar.gz" "$archive"
-            rm -rf "dist/$archive"
+              -o "dist/$binary" ./cmd/limitping
+            chmod 0755 "dist/$binary"
           done
           cd dist
-          sha256sum *.tar.gz > checksums.txt
+          sha256sum limitping_* > checksums.txt
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

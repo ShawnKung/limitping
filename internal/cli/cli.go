@@ -19,6 +19,7 @@ import (
 	"github.com/ShawnKung/limitping/internal/metrics"
 	"github.com/ShawnKung/limitping/internal/models"
 	"github.com/ShawnKung/limitping/internal/pingstate"
+	"github.com/ShawnKung/limitping/internal/updater"
 	"github.com/ShawnKung/limitping/internal/usage"
 )
 
@@ -82,7 +83,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&options.pushMetric, "push-metric", "", "将用量和 ping 结果推送到指定的 Pushgateway endpoint")
 	root.SetVersionTemplate("limitping {{.Version}}\n")
 	root.SetUsageTemplate(zhUsageTemplate)
-	root.AddCommand(newStatusCmd(options), newPingCmd(options), newVersionCmd())
+	root.AddCommand(newStatusCmd(options), newPingCmd(options), newVersionCmd(), newUpdateCmd())
 	root.InitDefaultCompletionCmd()
 	localizeCompletionCommand(root)
 	root.SetHelpCommand(newHelpCommand())
@@ -199,6 +200,31 @@ func newVersionCmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
 			fmt.Fprintf(cmd.OutOrStdout(), "limitping %s\ncommit: %s\n", currentVersion(), currentCommit())
+		},
+	}
+}
+
+func newUpdateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "update",
+		Short: "检查 GitHub Release 并自动更新",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			current := currentVersion()
+			fmt.Fprintf(cmd.OutOrStdout(), "正在检查更新（当前 %s）...\n", current)
+			result, err := updater.NewClient().Update(cmd.Context(), current)
+			if err != nil {
+				return err
+			}
+			switch {
+			case result.Updated:
+				fmt.Fprintf(cmd.OutOrStdout(), "已更新: %s -> %s\n安装位置: %s\n", result.Current, result.Latest, result.Path)
+			case result.Comparison > 0:
+				fmt.Fprintf(cmd.OutOrStdout(), "当前版本 %s 高于最新发布版 %s，未更新。\n", result.Current, result.Latest)
+			default:
+				fmt.Fprintf(cmd.OutOrStdout(), "已是最新版本: %s\n", result.Current)
+			}
+			return nil
 		},
 	}
 }
