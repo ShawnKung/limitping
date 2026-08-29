@@ -22,8 +22,12 @@ func TestShouldPingFull(t *testing.T) {
 }
 
 func TestPrintResetCredits(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("UTC+8", 8*60*60)
+	t.Cleanup(func() { time.Local = originalLocal })
+
 	var out bytes.Buffer
-	expiresAt := time.Now().Add(22*24*time.Hour + 8*time.Hour + 42*time.Minute).Format(time.RFC3339)
+	expiresAt := time.Now().In(time.Local).Add(22*24*time.Hour + 8*time.Hour + 42*time.Minute).Format(time.RFC3339)
 	printResetCredits(&out, &usage.ResetCredits{
 		AvailableCount: 1,
 		Credits: []usage.ResetCredit{{
