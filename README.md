@@ -54,6 +54,15 @@ CCLimitPing；如果只需要一个可嵌入现有 cron/plist/监控体系的 Co
 
 ## 安装
 
+安装最新 GitHub Release 到 `~/.local/bin`：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ShawnKung/limitping/main/install.sh | sh
+```
+
+脚本支持 macOS/Linux 的 amd64 与 arm64，会校验 SHA-256，并以 `0755` 权限安装
+`~/.local/bin/limitping`。建议执行前先打开并检查脚本内容。
+
 使用 Go：
 
 ```sh
@@ -90,6 +99,7 @@ codex (plus)
 ```sh
 limitping status
 limitping status --json
+limitping version
 limitping ping --dry-run
 limitping ping
 limitping ping --if-5h-full
@@ -246,6 +256,31 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/io.github.shawnkung.li
 ```sh
 make check   # gofmt 检查、go vet、单元测试
 make build
+```
+
+## 发布
+
+推送形如 `v0.1.0` 的 tag 会触发 GitHub Actions 创建 Release：
+
+```sh
+git tag -a v0.1.0 -m "limitping v0.1.0"
+git push origin v0.1.0
+```
+
+Release workflow 会把 tag 注入版本号、把 tag 对应的 Git commit 注入构建信息，并生成
+以下四种发布包及 `checksums.txt`：
+
+- macOS amd64
+- macOS arm64
+- Linux amd64
+- Linux arm64
+
+可以用下面的命令核对安装包来源：
+
+```console
+$ limitping version
+limitping 0.1.0
+commit: 0123456789abcdef0123456789abcdef01234567
 ```
 
 提交规范与安全报告方式见 [CONTRIBUTING.md](CONTRIBUTING.md) 和

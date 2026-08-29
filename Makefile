@@ -5,7 +5,8 @@ BINDIR ?= $(PREFIX)/bin
 DESTDIR ?=
 UNAME_S := $(shell uname -s)
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-VERSION_LDFLAG := -X $(MODULE)/internal/cli.version=$(VERSION)
+COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+VERSION_LDFLAG := -X $(MODULE)/internal/cli.version=$(VERSION) -X $(MODULE)/internal/cli.commit=$(COMMIT)
 
 ifeq ($(UNAME_S),Darwin)
 BUILD_LDFLAGS := -linkmode=external -s -w $(VERSION_LDFLAG)

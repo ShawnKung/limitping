@@ -22,7 +22,10 @@ import (
 	"github.com/ShawnKung/limitping/internal/usage"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "unknown"
+)
 
 const zhUsageTemplate = `用法:{{if .Runnable}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
@@ -192,10 +195,10 @@ func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "version",
 		Aliases: []string{"v", "ver"},
-		Short:   "显示版本号",
+		Short:   "显示版本号和构建提交",
 		Args:    cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "limitping %s\n", currentVersion())
+			fmt.Fprintf(cmd.OutOrStdout(), "limitping %s\ncommit: %s\n", currentVersion(), currentCommit())
 		},
 	}
 }
@@ -208,6 +211,20 @@ func currentVersion() string {
 		return strings.TrimPrefix(info.Main.Version, "v")
 	}
 	return "dev"
+}
+
+func currentCommit() string {
+	if commit != "" && commit != "unknown" {
+		return commit
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && setting.Value != "" {
+				return setting.Value
+			}
+		}
+	}
+	return "unknown"
 }
 
 func localizeHelpFlags(cmd *cobra.Command) {

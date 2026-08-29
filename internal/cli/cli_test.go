@@ -83,6 +83,23 @@ func TestCurrentVersionUsesInjectedValue(t *testing.T) {
 	}
 }
 
+func TestVersionCommandShowsVersionAndCommit(t *testing.T) {
+	originalVersion, originalCommit := version, commit
+	t.Cleanup(func() {
+		version, commit = originalVersion, originalCommit
+	})
+	version, commit = "v1.2.3", "abcdef123456"
+
+	var out bytes.Buffer
+	if err := Run([]string{"version"}, strings.NewReader(""), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "limitping 1.2.3\n") || !strings.Contains(got, "commit: abcdef123456\n") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
 func TestWindowLabelsAlignByDisplayWidth(t *testing.T) {
 	five := "  " + padDisplay("5h", 6) + " ["
 	weekly := "  " + padDisplay("周", 6) + " ["

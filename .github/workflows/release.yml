@@ -21,6 +21,7 @@ jobs:
         run: |
           set -eu
           version=${GITHUB_REF_NAME#v}
+          commit=${GITHUB_SHA}
           mkdir -p dist
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             os=${target%/*}
@@ -29,7 +30,7 @@ jobs:
             mkdir -p "dist/$archive"
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build \
               -trimpath \
-              -ldflags "-s -w -X github.com/ShawnKung/limitping/internal/cli.version=$version" \
+              -ldflags "-s -w -X github.com/ShawnKung/limitping/internal/cli.version=$version -X github.com/ShawnKung/limitping/internal/cli.commit=$commit" \
               -o "dist/$archive/limitping" ./cmd/limitping
             cp LICENSE README.md THIRD_PARTY_NOTICES.md "dist/$archive/"
             tar -C dist -czf "dist/$archive.tar.gz" "$archive"
