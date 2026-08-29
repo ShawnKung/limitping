@@ -27,6 +27,37 @@ make check
 git diff --check
 ```
 
+## Commit message
+
+所有提交必须遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
+
+```text
+<type>[optional scope][!]: <description>
+```
+
+允许的 `type`：
+
+- `feat`：新增功能；
+- `fix`：修复缺陷；
+- `docs`：仅修改文档；
+- `refactor`：不改变外部行为的代码重构；
+- `perf`：性能改进；
+- `test`：新增或修改测试；
+- `build`：构建系统或依赖变更；
+- `ci`：CI/CD 变更；
+- `chore`：其他维护工作；
+- `revert`：撤销已有提交。
+
+示例：
+
+```text
+feat(cli): print build commit in version output
+fix(installer): handle unsupported architectures
+docs: explain the five-hour wait-time model
+```
+
+存在破坏性变更时使用 `!`，并在提交正文中增加 `BREAKING CHANGE:` 说明。
+
 ## Pull request
 
 - 一个 PR 聚焦一个问题。
