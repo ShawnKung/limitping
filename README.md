@@ -128,10 +128,10 @@ codex exec -m <model> -c model_reasoning_effort=low ping
 - 每个预先启动的窗口内，第一次真实使用到来后会很快耗尽额度；
 - 只统计该窗口内至少发生一次真实使用的情况，不计网络延迟和 `ping` 自身消耗。
 
-令 $X$ 为窗口启动后第一次真实使用到来的时间。条件于 $X<T$，它服从截断指数分布：
+令 $X$ 为窗口启动后第一次真实使用到来的时间。条件于 $X\lt T$，它服从截断指数分布：
 
 ```math
-f_{X\mid X<T}(x)=\frac{\lambda e^{-\lambda x}}{1-e^{-\lambda T}},\qquad 0\le x<T
+f_{X\mid X\lt T}(x)=\frac{\lambda e^{-\lambda x}}{1-e^{-\lambda T}},\qquad 0\le x\lt T
 ```
 
 不预触发时，第一次真实使用才启动窗口；假设额度随即耗尽，下一次重置仍需等待约
@@ -140,7 +140,7 @@ $T$。预触发时，这次使用到达时窗口已经运行了 $X$，只需再�
 
 ```math
 \mathbb E[\Delta]
-=\mathbb E[X\mid X<T]
+=\mathbb E[X\mid X\lt T]
 =\frac{1}{\lambda}-\frac{T}{e^{\lambda T}-1}
 ```
 
