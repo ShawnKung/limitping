@@ -165,7 +165,12 @@ func Render(snapshot *usage.Snapshot, collectionDuration time.Duration, now time
 	if lastSuccessfulPing == nil {
 		missing = append(missing, "limitping_last_successful_ping_timestamp_seconds")
 	} else {
-		fmt.Fprintf(&output, "limitping_last_successful_ping_timestamp_seconds%s %.3f\n", providerLabels, float64(lastSuccessfulPing.UnixNano())/1e9)
+		lastPingLabels := prometheusLabels(map[string]string{
+			"provider": provider,
+			"plan":     plan,
+			"elapsed":  compactHighestUnit(now.Sub(*lastSuccessfulPing)),
+		})
+		fmt.Fprintf(&output, "limitping_last_successful_ping_timestamp_seconds%s %.3f\n", lastPingLabels, float64(lastSuccessfulPing.UnixNano())/1e9)
 	}
 	if snapshot.ResetCredits == nil {
 		missing = append(missing, "limitping_reset_credits_available")
@@ -173,7 +178,12 @@ func Render(snapshot *usage.Snapshot, collectionDuration time.Duration, now time
 	} else {
 		fmt.Fprintf(&output, "limitping_reset_credits_available%s %d\n", providerLabels, snapshot.ResetCredits.AvailableCount)
 		if expiration, ok := earliestAvailableCreditExpiration(snapshot.ResetCredits); ok {
-			fmt.Fprintf(&output, "limitping_reset_credit_expiration_timestamp_seconds%s %.3f\n", providerLabels, expiration)
+			expirationLabels := prometheusLabels(map[string]string{
+				"provider":  provider,
+				"plan":      plan,
+				"remaining": compactRemaining(expiration, now),
+			})
+			fmt.Fprintf(&output, "limitping_reset_credit_expiration_timestamp_seconds%s %.3f\n", expirationLabels, expiration)
 		} else {
 			missing = append(missing, "limitping_reset_credit_expiration_timestamp_seconds")
 		}
@@ -211,6 +221,29 @@ func earliestAvailableCreditExpiration(credits *usage.ResetCredits) (float64, bo
 		return 0, false
 	}
 	return float64(earliest.UnixNano()) / 1e9, true
+}
+
+func compactRemaining(expiration float64, now time.Time) string {
+	remaining := time.Duration(expiration*float64(time.Second)) - time.Duration(now.UnixNano())
+	if remaining < 0 {
+		remaining = 0
+	}
+	days := int64(remaining / (24 * time.Hour))
+	hours := int64((remaining % (24 * time.Hour)) / time.Hour)
+	return fmt.Sprintf("%d天%d时", days, hours)
+}
+
+func compactHighestUnit(elapsed time.Duration) string {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed >= 24*time.Hour {
+		return fmt.Sprintf("%d天", int64(elapsed/(24*time.Hour)))
+	}
+	if elapsed >= time.Hour {
+		return fmt.Sprintf("%d时", int64(elapsed/time.Hour))
+	}
+	return fmt.Sprintf("%d秒", int64(elapsed/time.Second))
 }
 
 func renderWindow(output *strings.Builder, window *usage.Window, provider, plan, name string) []string {
