@@ -133,7 +133,7 @@
               }
             ]
           },
-          "unit": "h"
+          "unit": "suffix:时"
         },
         "overrides": []
       },
@@ -250,17 +250,17 @@
                 "color": "green",
                 "value": null
               },
-              {
-                "color": "yellow",
-                "value": 18000
-              },
-              {
-                "color": "red",
-                "value": 21600
-              }
+          {
+            "color": "yellow",
+            "value": 18001
+          },
+          {
+            "color": "red",
+            "value": 86401
+          }
             ]
           },
-          "unit": "s"
+      "unit": "none"
         },
         "overrides": []
       },
@@ -283,7 +283,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto",
+      "textMode": "name",
         "wideLayout": true
       },
       "targets": [
@@ -291,7 +291,7 @@
           "editorMode": "code",
           "expr": "time() - limitping_last_successful_ping_timestamp_seconds{exported_job=\"limitping\",collector=\"limitping\",exported_instance=\"$instance\",provider=\"codex\"}",
           "instant": true,
-          "legendFormat": "距上次实际 ping",
+      "legendFormat": "{{elapsed}}",
           "range": false,
           "refId": "A"
         }
@@ -385,7 +385,7 @@
               }
             ]
           },
-          "unit": "s"
+          "unit": "suffix:秒"
         },
         "overrides": []
       },
@@ -588,7 +588,7 @@
               }
             ]
           },
-          "unit": "h"
+          "unit": "suffix:时"
         },
         "overrides": []
       },
@@ -655,7 +655,7 @@
               }
             ]
           },
-          "unit": "d"
+          "unit": "suffix:天"
         },
         "overrides": []
       },
@@ -704,17 +704,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "transparent",
-                  "text": "0"
-                }
-              },
-              "type": "value"
-            }
-          ],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -732,7 +721,7 @@
               }
             ]
           },
-          "unit": "dtdhms",
+          "unit": "none",
           "decimals": 0
         },
         "overrides": []
@@ -966,7 +955,7 @@
             }
           },
           "min": 0,
-          "unit": "m"
+          "unit": "suffix:分钟"
         },
         "overrides": []
       },

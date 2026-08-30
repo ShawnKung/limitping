@@ -65,10 +65,13 @@ func TestRenderMatchesExistingCollectorMetrics(t *testing.T) {
 	if !strings.Contains(payload, `limitping_ping_completed{plan="plus",provider="codex"} 1`) {
 		t.Fatalf("completed ping metric missing:\n%s", payload)
 	}
-	if !strings.Contains(payload, `limitping_last_successful_ping_timestamp_seconds{plan="plus",provider="codex"} 900.000`) {
+	if !strings.Contains(payload, `limitping_last_successful_ping_timestamp_seconds{elapsed="100秒"`) {
+		t.Fatalf("last successful ping display label missing:\n%s", payload)
+	}
+	if !strings.Contains(payload, `plan="plus",provider="codex"} 900.000`) {
 		t.Fatalf("last successful ping metric missing:\n%s", payload)
 	}
-	if !strings.Contains(payload, `limitping_reset_credit_expiration_timestamp_seconds{plan="plus",provider="codex"}`) {
+	if !strings.Contains(payload, `limitping_reset_credit_expiration_timestamp_seconds{plan="plus",provider="codex",remaining="`) {
 		t.Fatalf("reset credit expiration metric missing:\n%s", payload)
 	}
 }
@@ -83,6 +86,34 @@ func TestEarliestAvailableCreditExpiration(t *testing.T) {
 	want := float64(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC).Unix())
 	if !ok || got != want {
 		t.Fatalf("expiration = %f, %v; want %f", got, ok, want)
+	}
+}
+
+func TestCompactRemaining(t *testing.T) {
+	now := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
+	expiration := float64(now.Add(22*24*time.Hour + 6*time.Hour + 59*time.Minute).Unix())
+	if got := compactRemaining(expiration, now); got != "22天6时" {
+		t.Fatalf("compactRemaining = %q; want %q", got, "22天6时")
+	}
+	if got := compactRemaining(float64(now.Add(-time.Hour).Unix()), now); got != "0天0时" {
+		t.Fatalf("expired compactRemaining = %q; want %q", got, "0天0时")
+	}
+}
+
+func TestCompactHighestUnit(t *testing.T) {
+	tests := []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{-time.Second, "0秒"},
+		{59 * time.Minute, "3540秒"},
+		{5*time.Hour + 59*time.Minute, "5时"},
+		{2*24*time.Hour + 23*time.Hour, "2天"},
+	}
+	for _, test := range tests {
+		if got := compactHighestUnit(test.elapsed); got != test.want {
+			t.Errorf("compactHighestUnit(%s) = %q; want %q", test.elapsed, got, test.want)
+		}
 	}
 }
 
