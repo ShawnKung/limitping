@@ -35,7 +35,8 @@ func completeSnapshot() *usage.Snapshot {
 
 func TestRenderMatchesExistingCollectorMetrics(t *testing.T) {
 	lastPing := time.Unix(900, 0)
-	payload, missing := Render(completeSnapshot(), 250*time.Millisecond, time.Unix(1000, 0), true, &lastPing)
+	plannedPings := []time.Time{time.Unix(20000, 0), time.Unix(38000, 0)}
+	payload, missing := Render(completeSnapshot(), 250*time.Millisecond, time.Unix(1000, 0), true, &lastPing, plannedPings)
 	if len(missing) != 0 {
 		t.Fatalf("missing metrics: %v", missing)
 	}
@@ -55,6 +56,7 @@ func TestRenderMatchesExistingCollectorMetrics(t *testing.T) {
 		"limitping_usage_fetched_timestamp_seconds",
 		"limitping_ping_completed",
 		"limitping_last_successful_ping_timestamp_seconds",
+		"limitping_planned_ping_timestamp_seconds",
 		"limitping_collector_generated_timestamp_seconds",
 	}
 	for _, metric := range want {
@@ -73,6 +75,12 @@ func TestRenderMatchesExistingCollectorMetrics(t *testing.T) {
 	}
 	if !strings.Contains(payload, `limitping_reset_credit_expiration_timestamp_seconds{plan="plus",provider="codex",remaining="`) {
 		t.Fatalf("reset credit expiration metric missing:\n%s", payload)
+	}
+	if !strings.Contains(payload, `limitping_planned_ping_timestamp_seconds{index="1",plan="plus",provider="codex"} 20000.000`) {
+		t.Fatalf("planned ping #1 metric missing:\n%s", payload)
+	}
+	if !strings.Contains(payload, `limitping_planned_ping_timestamp_seconds{index="2",plan="plus",provider="codex"} 38000.000`) {
+		t.Fatalf("planned ping #2 metric missing:\n%s", payload)
 	}
 }
 
@@ -118,9 +126,13 @@ func TestCompactHighestUnit(t *testing.T) {
 }
 
 func TestRenderReportsMissingLastSuccessfulPing(t *testing.T) {
-	_, missing := Render(completeSnapshot(), time.Second, time.Unix(1000, 0), false, nil)
-	if !strings.Contains(strings.Join(missing, ","), "limitping_last_successful_ping_timestamp_seconds") {
+	_, missing := Render(completeSnapshot(), time.Second, time.Unix(1000, 0), false, nil, nil)
+	joined := strings.Join(missing, ",")
+	if !strings.Contains(joined, "limitping_last_successful_ping_timestamp_seconds") {
 		t.Fatalf("missing metrics = %v", missing)
+	}
+	if !strings.Contains(joined, "limitping_planned_ping_timestamp_seconds") {
+		t.Fatalf("planned ping should be reported missing when absent: %v", missing)
 	}
 }
 

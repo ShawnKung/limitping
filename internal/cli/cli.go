@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ShawnKung/limitping/internal/align"
 	"github.com/ShawnKung/limitping/internal/auth"
 	"github.com/ShawnKung/limitping/internal/metrics"
 	"github.com/ShawnKung/limitping/internal/models"
@@ -83,7 +84,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&options.pushMetric, "push-metric", "", "将用量和 ping 结果推送到指定的 Pushgateway endpoint")
 	root.SetVersionTemplate("limitping {{.Version}}\n")
 	root.SetUsageTemplate(zhUsageTemplate)
-	root.AddCommand(newStatusCmd(options), newPingCmd(options), newVersionCmd(), newUpdateCmd())
+	root.AddCommand(newStatusCmd(options), newPingCmd(options), newAlignCmd(), newVersionCmd(), newUpdateCmd())
 	root.InitDefaultCompletionCmd()
 	localizeCompletionCommand(root)
 	root.SetHelpCommand(newHelpCommand())
@@ -166,7 +167,7 @@ func newStatusCmd(options *globalOptions) *cobra.Command {
 				printStatus(cmd.OutOrStdout(), snapshot)
 			}
 			if options.pushMetric != "" {
-				return pushSnapshot(cmd.Context(), cmd.ErrOrStderr(), snapshot, collectionDuration, options.pushMetric, false, false)
+				return pushSnapshot(cmd.Context(), cmd.ErrOrStderr(), snapshot, collectionDuration, options.pushMetric, false, false, nil)
 			}
 			return nil
 		},
@@ -178,17 +179,24 @@ func newStatusCmd(options *globalOptions) *cobra.Command {
 func newPingCmd(options *globalOptions) *cobra.Command {
 	var dryRun bool
 	var ifFull bool
+	var withoutAlign bool
 	cmd := &cobra.Command{
 		Use:     "ping",
 		Aliases: []string{"p"},
 		Short:   "用当前最弱的可见模型发送最小 ping",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return executePing(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), dryRun, ifFull, options.pushMetric)
+			return executePing(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), pingParams{
+				dryRun:       dryRun,
+				ifFull:       ifFull,
+				withoutAlign: withoutAlign,
+				pushEndpoint: options.pushMetric,
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只打印将执行的命令")
-	cmd.Flags().BoolVar(&ifFull, "if-5h-full", false, "仅在 5h 可用额度为 100% 时执行")
+	cmd.Flags().BoolVar(&ifFull, "if-5h-full", false, "仅在 5h 可用额度为 100% 时执行；默认会结合已配置的 cron 目标做相位对齐（见 align 子命令），仅在满额且到达对齐时间后才 ping")
+	cmd.Flags().BoolVar(&withoutAlign, "without-align", false, "关闭相位对齐，只保留满额判断（满额即 ping）；仅在配合 --if-5h-full 时有意义")
 	return cmd
 }
 
@@ -263,7 +271,35 @@ func localizeHelpFlags(cmd *cobra.Command) {
 	}
 }
 
-func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, dryRun, ifFull bool, pushEndpoint string) error {
+type pingParams struct {
+	dryRun       bool
+	ifFull       bool
+	withoutAlign bool
+	pushEndpoint string
+}
+
+func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, params pingParams) error {
+	dryRun := params.dryRun
+	ifFull := params.ifFull
+	pushEndpoint := params.pushEndpoint
+	// 相位对齐是 --if-5h-full 的默认行为；--without-align 关闭它，退化为“满额即 ping”。
+	useAlign := ifFull && !params.withoutAlign
+
+	var planner *align.Planner
+	if useAlign {
+		cfg, err := align.Load()
+		if err != nil {
+			return err
+		}
+		planner, err = align.NewPlanner(cfg)
+		if err != nil {
+			return err
+		}
+		if !planner.HasTargets() {
+			fmt.Fprintln(stderr, "提示：未配置对齐目标（limitping align add \"<cron>\"），本次退化为满额即 ping。")
+		}
+	}
+
 	var snapshot *usage.Snapshot
 	var collectionDuration time.Duration
 	collect := func() error {
@@ -281,11 +317,22 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		if !ok {
 			fmt.Fprintf(stdout, "跳过 ping：%s\n", reason)
 			if pushEndpoint != "" {
-				return pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, dryRun, false)
+				return pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, dryRun, false, planner)
 			}
 			return nil
 		}
 		fmt.Fprintln(stdout, "5h 可用额度为 100%，满足触发条件。")
+		if planner != nil && planner.HasTargets() {
+			decision := planner.Decide(time.Now())
+			fmt.Fprintf(stdout, "对齐决策：%s\n", decision.Reason)
+			if decision.Action == align.ActionHold {
+				fmt.Fprintf(stdout, "本次延后 ping（目标 %s）。\n", decision.Target.Format("01-02 15:04"))
+				if pushEndpoint != "" {
+					return pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, dryRun, false, planner)
+				}
+				return nil
+			}
+		}
 	}
 	model, err := models.Weakest(ctx)
 	if err != nil {
@@ -301,7 +348,7 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 					return fmt.Errorf("采集推送指标: %w", err)
 				}
 			}
-			return pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, true, false)
+			return pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, true, false, planner)
 		}
 		return nil
 	}
@@ -321,7 +368,7 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 			}
 			return metricErr
 		}
-		pushErr := pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, false, pingErr == nil)
+		pushErr := pushSnapshot(ctx, stdout, snapshot, collectionDuration, pushEndpoint, false, pingErr == nil, planner)
 		return errors.Join(wrapPingError(pingErr), wrapStateError(stateErr), pushErr)
 	}
 	if pingErr != nil {
@@ -330,16 +377,23 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 	return wrapStateError(stateErr)
 }
 
-func pushSnapshot(ctx context.Context, out io.Writer, snapshot *usage.Snapshot, collectionDuration time.Duration, endpoint string, dryRun, pingCompleted bool) error {
+func pushSnapshot(ctx context.Context, out io.Writer, snapshot *usage.Snapshot, collectionDuration time.Duration, endpoint string, dryRun, pingCompleted bool, planner *align.Planner) error {
 	lastSuccessfulPing, err := pingstate.LastSuccessfulPing()
 	if err != nil {
 		return fmt.Errorf("读取最近成功 ping: %w", err)
+	}
+	var plannedPings []time.Time
+	if planner != nil && planner.HasTargets() {
+		for _, plan := range planner.Upcoming(time.Now(), lastSuccessfulPing, plannedPingCount) {
+			plannedPings = append(plannedPings, plan.PingAt)
+		}
 	}
 	result, err := metrics.Deliver(ctx, snapshot, collectionDuration, metrics.Options{
 		GatewayURL:         endpoint,
 		DryRun:             dryRun,
 		PingCompleted:      pingCompleted,
 		LastSuccessfulPing: lastSuccessfulPing,
+		PlannedPings:       plannedPings,
 	})
 	if err != nil {
 		return err
@@ -351,6 +405,9 @@ func pushSnapshot(ctx context.Context, out io.Writer, snapshot *usage.Snapshot, 
 	fmt.Fprintf(out, "指标已推送: %s\n", result.URL)
 	return nil
 }
+
+// plannedPingCount 是上报及预览默认展示的未来计划 ping 数量。
+const plannedPingCount = 5
 
 func wrapPingError(err error) error {
 	if err == nil {
