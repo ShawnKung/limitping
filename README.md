@@ -39,7 +39,9 @@ CCLimitPing；如果只需要一个可嵌入现有 cron/plist/监控体系的 Co
 - `--json` 输出机器可读快照。
 - 从 `codex debug models` 动态选择最低优先级的可见模型。
 - `--dry-run` 在执行模型调用或推送指标前预览操作。
-- `--if-5h-full` 只在 5 小时额度恢复到 100% 时执行 ping；指标仍正常上报。
+- `--if-5h-full` 只在 5 小时额度恢复到 100% 时执行 ping；此时默认还会结合已配置的 cron 目标做相位对齐：仅在满额且到达对齐时间后才 ping（指标仍正常上报）。
+- `--without-align` 关闭相位对齐，只保留满额判断（满额即 ping）；仅在配合 `--if-5h-full` 时有意义。不带任何 flag 时 `ping` 立即执行，与对齐无关。
+- `align` 子命令管理多条 cron 目标（每条带唯一 id 和自己的延时预算 max-delay，可按 id 单独删除），并预览未来的 ping/刷新时间。
 - 将用量、重置券数量和最近成功 ping 时间推送到 Pushgateway。
 - 成功 ping 时间持久化，后续上报不会被 `ping_completed=0` 覆盖。
 
@@ -104,6 +106,10 @@ limitping update
 limitping ping --dry-run
 limitping ping
 limitping ping --if-5h-full
+limitping ping --if-5h-full --without-align
+limitping align add "0 0 * * *"
+limitping align list
+limitping align preview --count 5
 limitping ping --push-metric https://pushgateway.example.com
 limitping status --push-metric https://pushgateway.example.com
 ```
@@ -117,7 +123,62 @@ codex exec -m <model> -c model_reasoning_effort=low ping
 
 `--if-5h-full` 要求用量响应包含 5 小时窗口，并且 `used_percent == 0`。不满足时命令正常
 退出；如果同时设置了 `--push-metric`，仍会推送最新用量，并将本次
-`limitping_ping_completed` 记为 `0`。
+`limitping_ping_completed` 记为 `0`。满足满额条件后，默认还会做相位对齐（见下一节），
+只有到达对齐时间才真正 ping；加 `--without-align` 可关闭对齐，恢复“满额即 ping”。
+
+## 刷新时间对齐（`--if-5h-full` 默认开启）
+
+如果你希望 5h 窗口的刷新时刻尽量落在某个固定时间（例如每晚 00:00，好让 23:00 开始
+工作、用完一轮后 00:00 刚好刷新到），可以用 `align` 配置一组 cron 目标。之后
+`limitping ping --if-5h-full` 会默认做“尽力而为”的相位对齐（无需额外 flag）。
+
+配合每分钟运行一次的 cron（或 LaunchAgent）：平时满额即 ping、每 5h 正常链式；临近
+目标时间时，会在延时预算内延后 ping，使某次窗口的重置刚好落在目标时间附近。若只想保留
+满额判断而不对齐，加 `--without-align`。
+
+```sh
+# 声明目标：每晚 00:00（多条时，每轮取最近的一个目标）
+limitping align add "0 0 * * *"
+limitping align add "0 12 * * *"
+
+# 延时预算（max-delay）绑定在每个目标上：add 时用 --max-delay 设置该目标自己的预算；
+# 缺省 90m。重复 add 同一个 cron 且带 --max-delay 时，只更新该目标的预算、不新增。
+limitping align add "0 0 * * *" --max-delay 90m
+
+# 查看当前配置（每个目标一行：id、cron、该目标的延时预算 max-delay）
+limitping align list
+
+# 按 id（或唯一前缀）删除单个目标；clear 清空全部
+limitping align delete <id>
+limitping align clear
+
+# 预览未来 5 次计划 ping 与对应刷新时间
+limitping align preview --count 5
+
+# 实际运行：--if-5h-full 默认对齐；--without-align 关闭对齐（满额即 ping）
+limitping ping --if-5h-full
+limitping ping --if-5h-full --without-align
+```
+
+工作原理与取舍：
+
+- 目标刷新时刻 `T` 取所有 cron 中最近的一次触发；理想 ping 锚点为 `A* = T − 5h`，
+  在此锚定可让窗口在 `T` 重置。
+- 离锚点还远（超过该目标自己的延时预算）时，按原始行为立即 ping，保持窗口新鲜；临近锚点
+  时在预算内延后到贴近 `A*` 再 ping。判定只依赖当前时间与 cron，无额外状态。
+- 因为窗口是滚动 5h，而 `24 ÷ 5` 除不尽，纯 5h 链无法每天精确命中同一墙钟时间；且相位
+  只能“往后拖、不能往前提”。延时预算（每个目标各自设置，缺省 90 分钟）决定精度与窗口空转
+  之间的平衡。对齐是“大致落在目标时间附近”，通常有分钟级到 1~2 小时的偏差。
+
+配置保存在 `${XDG_CONFIG_HOME:-$HOME/.config}/limitping/config.json`，延时预算随每个目标落盘：
+
+```json
+{
+  "targets": [
+    { "id": "ca5ca66014b8", "cron": "0 0 * * *", "max_delay_minutes": 90 }
+  ]
+}
+```
 
 ## 预触发 5h 窗口能少等多久？
 
@@ -194,6 +255,7 @@ $T/2=2.5$ 小时，也就是约 **50%**。这也是“随机时刻到达”直�
 | `limitping_reset_credit_expiration_timestamp_seconds` | 最早到期的可用重置券时间戳 |
 | `limitping_ping_completed` | 本次是否完成 ping（0/1） |
 | `limitping_last_successful_ping_timestamp_seconds` | 最近一次成功 ping 的时间戳 |
+| `limitping_planned_ping_timestamp_seconds` | 未来计划 ping 时间戳（`index="1..5"`，1 为最近，需配置对齐目标并以 `--if-5h-full` 运行） |
 | `metrics_pusher_collector_success` | 本次采集是否成功 |
 | `metrics_pusher_last_run_timestamp_seconds` | 最近采集开始时间 |
 

@@ -22,6 +22,7 @@ type Options struct {
 	DryRun             bool
 	PingCompleted      bool
 	LastSuccessfulPing *time.Time
+	PlannedPings       []time.Time
 	HTTPClient         *http.Client
 }
 
@@ -50,7 +51,7 @@ func Deliver(ctx context.Context, snapshot *usage.Snapshot, collectionDuration t
 	if err != nil {
 		return result, err
 	}
-	result.Payload, result.MissingMetrics = Render(snapshot, collectionDuration, time.Now(), options.PingCompleted, options.LastSuccessfulPing)
+	result.Payload, result.MissingMetrics = Render(snapshot, collectionDuration, time.Now(), options.PingCompleted, options.LastSuccessfulPing, options.PlannedPings)
 	if options.DryRun {
 		return result, nil
 	}
@@ -103,7 +104,7 @@ func groupingURL(gatewayURL, instance string) (string, error) {
 	return baseURL + "/" + strings.Join(parts, "/"), nil
 }
 
-func Render(snapshot *usage.Snapshot, collectionDuration time.Duration, now time.Time, pingCompleted bool, lastSuccessfulPing *time.Time) (string, []string) {
+func Render(snapshot *usage.Snapshot, collectionDuration time.Duration, now time.Time, pingCompleted bool, lastSuccessfulPing *time.Time, plannedPings []time.Time) (string, []string) {
 	var output strings.Builder
 	output.WriteString("# HELP metrics_pusher_collector_success Whether the collector completed successfully.\n")
 	output.WriteString("# TYPE metrics_pusher_collector_success gauge\n")
@@ -140,6 +141,8 @@ func Render(snapshot *usage.Snapshot, collectionDuration time.Duration, now time
 	output.WriteString("# TYPE limitping_ping_completed gauge\n")
 	output.WriteString("# HELP limitping_last_successful_ping_timestamp_seconds Unix timestamp of the latest completed ping operation.\n")
 	output.WriteString("# TYPE limitping_last_successful_ping_timestamp_seconds gauge\n")
+	output.WriteString("# HELP limitping_planned_ping_timestamp_seconds Unix timestamp of an upcoming planned ping, indexed from 1 (soonest).\n")
+	output.WriteString("# TYPE limitping_planned_ping_timestamp_seconds gauge\n")
 
 	provider := snapshot.Provider
 	if provider == "" {
@@ -171,6 +174,18 @@ func Render(snapshot *usage.Snapshot, collectionDuration time.Duration, now time
 			"elapsed":  compactHighestUnit(now.Sub(*lastSuccessfulPing)),
 		})
 		fmt.Fprintf(&output, "limitping_last_successful_ping_timestamp_seconds%s %.3f\n", lastPingLabels, float64(lastSuccessfulPing.UnixNano())/1e9)
+	}
+	if len(plannedPings) == 0 {
+		missing = append(missing, "limitping_planned_ping_timestamp_seconds")
+	} else {
+		for i, planned := range plannedPings {
+			plannedLabels := prometheusLabels(map[string]string{
+				"provider": provider,
+				"plan":     plan,
+				"index":    strconv.Itoa(i + 1),
+			})
+			fmt.Fprintf(&output, "limitping_planned_ping_timestamp_seconds%s %.3f\n", plannedLabels, float64(planned.UnixNano())/1e9)
+		}
 	}
 	if snapshot.ResetCredits == nil {
 		missing = append(missing, "limitping_reset_credits_available")
