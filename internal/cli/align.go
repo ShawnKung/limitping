@@ -172,10 +172,24 @@ func printAlignPreview(out io.Writer, planner *align.Planner, lastPing *time.Tim
 	}
 	plans := planner.Upcoming(now, lastPing, count)
 	fmt.Fprintln(out, "未来计划：")
+	var previousPing *time.Time
+	if lastPing != nil {
+		local := lastPing.Local()
+		previousPing = &local
+	}
 	for i, plan := range plans {
-		fmt.Fprintf(out, "  %d. ping %s  →  刷新 %s\n",
+		interval := ""
+		if previousPing != nil {
+			interval = fmt.Sprintf(" (+%s)", formatDurationCN(plan.PingAt.Sub(*previousPing)))
+		} else if i == 0 {
+			interval = " (起点：无最近记录)"
+		}
+		fmt.Fprintf(out, "  %d. ping %s%s  →  刷新 %s\n",
 			i+1,
 			plan.PingAt.Local().Format("01-02 15:04"),
+			interval,
 			plan.RefreshAt.Local().Format("01-02 15:04"))
+		local := plan.PingAt.Local()
+		previousPing = &local
 	}
 }
