@@ -41,7 +41,7 @@ CCLimitPing；如果只需要一个可嵌入现有 cron/plist/监控体系的 Co
 - `--dry-run` 在执行模型调用或推送指标前预览操作。
 - `--if-5h-full` 只在 5 小时额度恢复到 100% 时执行 ping；此时默认还会结合已配置的 cron 目标做相位对齐：仅在满额且到达对齐时间后才 ping（指标仍正常上报）。
 - `--without-align` 关闭相位对齐，只保留满额判断（满额即 ping）；仅在配合 `--if-5h-full` 时有意义。不带任何 flag 时 `ping` 立即执行，与对齐无关。
-- `--until-anchored` 持续 ping 直到 5 小时窗口开始计时（被首次使用锚定）：起始输入较大，每轮翻倍，每次 ping 后回读用量确认是否已计时，计时后立即停止。
+- `--until-anchored` 持续 ping 直到 5 小时窗口开始计时（被首次使用锚定）：起始输入较大，每轮翻倍，每次 ping 后回读用量确认是否已计时，计时后立即停止；配合 `--push-metric` 时也会上报已配置 align 目标的未来计划。
 - `align` 子命令管理多条 cron 目标（每条带唯一 id 和自己的延时预算 max-delay，可按 id 单独删除），并预览未来的 ping/刷新时间。
 - 将用量、重置券数量和最近成功 ping 时间推送到 Pushgateway。
 - 成功 ping 时间持久化，后续上报不会被 `ping_completed=0` 覆盖。
@@ -283,7 +283,7 @@ $T/2=2.5$ 小时，也就是约 **50%**。这也是“随机时刻到达”直�
 | `limitping_reset_credit_expiration_timestamp_seconds` | 最早到期的可用重置券时间戳 |
 | `limitping_ping_completed` | 本次是否完成 ping（0/1） |
 | `limitping_last_successful_ping_timestamp_seconds` | 最近一次成功 ping 的时间戳 |
-| `limitping_planned_ping_timestamp_seconds` | 未来计划 ping 时间戳（`index="1..5"`，1 为最近，需配置对齐目标并以 `--if-5h-full` 运行） |
+| `limitping_planned_ping_timestamp_seconds` | 未来计划 ping 时间戳（`index="1..5"`，1 为最近；需配置对齐目标，并通过 `--if-5h-full` 或 `--until-anchored` 配合 `--push-metric` 运行） |
 | `metrics_pusher_collector_success` | 本次采集是否成功 |
 | `metrics_pusher_last_run_timestamp_seconds` | 最近采集开始时间 |
 

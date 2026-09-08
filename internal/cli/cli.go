@@ -291,8 +291,12 @@ const (
 )
 
 func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, params pingParams) error {
+	planner, err := plannerForPing(params)
+	if err != nil {
+		return err
+	}
 	if params.untilAnchored {
-		return executePingUntilAnchored(ctx, stdout, stderr, params)
+		return executePingUntilAnchored(ctx, stdout, stderr, params, planner)
 	}
 	dryRun := params.dryRun
 	ifFull := params.ifFull
@@ -300,16 +304,7 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 	// 相位对齐是 --if-5h-full 的默认行为；--without-align 关闭它，退化为“满额即 ping”。
 	useAlign := ifFull && !params.withoutAlign
 
-	var planner *align.Planner
 	if useAlign {
-		cfg, err := align.Load()
-		if err != nil {
-			return err
-		}
-		planner, err = align.NewPlanner(cfg)
-		if err != nil {
-			return err
-		}
 		if !planner.HasTargets() {
 			fmt.Fprintln(stderr, "提示：未配置对齐目标（limitping align add \"<cron>\"），本次退化为满额即 ping。")
 		}
@@ -396,17 +391,30 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 	return wrapStateError(stateErr)
 }
 
+func plannerForPing(params pingParams) (*align.Planner, error) {
+	needsPlanner := params.ifFull && !params.withoutAlign
+	needsPlannedMetrics := params.untilAnchored && params.pushEndpoint != ""
+	if !needsPlanner && !needsPlannedMetrics {
+		return nil, nil
+	}
+	cfg, err := align.Load()
+	if err != nil {
+		return nil, err
+	}
+	return align.NewPlanner(cfg)
+}
+
 // executePingUntilAnchored 持续发送 ping 直到 5h 窗口开始计时（被首次使用锚定）。
 //
 // 极小的 ping 未必能立刻让窗口进入计时，且窗口是否计时无法从单次调用即时得知，
 // 需要回读用量确认。为提高单轮成功率同时避免一开始就发过大的请求，这里从一个较大的
 // 起始 prompt 长度出发，每轮把长度翻倍，逐步增加单次消耗；每次 ping 后等待片刻再回读
 // 用量，一旦检测到窗口在计时立即停止，或到达轮数上限后停止。
-func executePingUntilAnchored(ctx context.Context, stdout, stderr io.Writer, params pingParams) error {
+func executePingUntilAnchored(ctx context.Context, stdout, stderr io.Writer, params pingParams, planner *align.Planner) error {
 	if snapshot, err := readUsage(ctx); err == nil {
 		if window := snapshot.FiveHour; window != nil && window.Active {
 			fmt.Fprintln(stdout, "5h 窗口已在计时，无需 ping。")
-			return maybePush(ctx, stdout, snapshot, params, false, nil)
+			return maybePush(ctx, stdout, snapshot, params, false, planner)
 		}
 	}
 
@@ -440,11 +448,11 @@ func executePingUntilAnchored(ctx context.Context, stdout, stderr io.Writer, par
 		window := snapshot.FiveHour
 		if params.dryRun {
 			fmt.Fprintln(stdout, "dry-run：跳过实际 ping 与锚定检查。")
-			return maybePush(ctx, stdout, snapshot, params, false, nil)
+			return maybePush(ctx, stdout, snapshot, params, false, planner)
 		}
 		if window != nil && window.Active {
 			fmt.Fprintf(stdout, "5h 窗口已开始计时，%s 后重置。\n", formatDurationCN(time.Duration(window.RemainingSeconds)*time.Second))
-			return maybePush(ctx, stdout, snapshot, params, true, nil)
+			return maybePush(ctx, stdout, snapshot, params, true, planner)
 		}
 		fmt.Fprintln(stdout, "窗口尚未开始计时，加大输入后重试。")
 		runes *= 2
