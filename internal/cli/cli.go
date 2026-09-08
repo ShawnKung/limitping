@@ -338,7 +338,11 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		}
 		fmt.Fprintln(stdout, "5h 可用额度为 100%，满足触发条件。")
 		if planner != nil && planner.HasTargets() {
-			decision := planner.Decide(time.Now())
+			lastSuccessfulPing, err := pingstate.LastSuccessfulPing()
+			if err != nil {
+				return fmt.Errorf("读取最近成功 ping: %w", err)
+			}
+			decision := planner.DecideFromLastPing(time.Now(), lastSuccessfulPing)
 			fmt.Fprintf(stdout, "对齐决策：%s\n", decision.Reason)
 			if decision.Action == align.ActionHold {
 				fmt.Fprintf(stdout, "本次延后 ping（目标 %s）。\n", decision.Target.Format("01-02 15:04"))

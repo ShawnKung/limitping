@@ -32,16 +32,21 @@ func TestDecideNoTargetsAlwaysPings(t *testing.T) {
 	}
 }
 
-func TestDecideFarFromTargetPingsImmediately(t *testing.T) {
-	// 目标每晚 00:00；现在 08:00，锚点应为 19:00，距今 11h，远超预算 → 立即 ping。
+func TestDecideSpreadsDelayAcrossReachableWindows(t *testing.T) {
+	// 目标每晚 00:00；现在 08:00，锚点为 19:00。11h 可以拆成两个 5h 窗口
+	// 加三段 20min hold，因此不应把全部延迟堆到最后一跳。
 	planner := mustPlanner(t, []string{"0 0 * * *"}, DefaultMaxDelayMinutes)
 	now := time.Date(2026, 9, 7, 8, 0, 0, 0, time.Local)
 	decision := planner.Decide(now)
-	if decision.Action != ActionPing {
-		t.Fatalf("expected ping when far from anchor, got %+v", decision)
+	if decision.Action != ActionHold {
+		t.Fatalf("expected hold when delay can be spread, got %+v", decision)
 	}
 	if !decision.HasTarget {
 		t.Fatalf("expected a resolved target")
+	}
+	wantPing := time.Date(2026, 9, 7, 8, 20, 0, 0, time.Local)
+	if !decision.PlannedPing.Equal(wantPing) {
+		t.Fatalf("planned ping = %s, want %s", decision.PlannedPing, wantPing)
 	}
 }
 
@@ -106,8 +111,22 @@ func TestDecideUsesPerTargetMaxDelay(t *testing.T) {
 	}
 }
 
+func TestDecidePingsWhenSpreadWouldExceedBudget(t *testing.T) {
+	planner, err := NewPlanner(&Config{Targets: []Target{
+		{ID: "aaaa", Cron: "0 0 * * *", MaxDelayMinutes: 15},
+	}})
+	if err != nil {
+		t.Fatalf("NewPlanner: %v", err)
+	}
+	now := time.Date(2026, 9, 7, 8, 0, 0, 0, time.Local)
+	decision := planner.Decide(now)
+	if decision.Action != ActionPing {
+		t.Fatalf("expected ping when spread delay exceeds budget, got %+v", decision)
+	}
+}
+
 func TestNextPingTimesConvergeThenAlign(t *testing.T) {
-	// 从 08:00 起链式：前几次每 5h，临近后把某次拖到 19:00，使刷新落在 00:00。
+	// 从 08:00 起把额外等待均匀摊到后续窗口，最终使刷新落在 00:00。
 	planner := mustPlanner(t, []string{"0 0 * * *"}, DefaultMaxDelayMinutes)
 	start := time.Date(2026, 9, 7, 8, 0, 0, 0, time.Local)
 	plans := planner.NextPingTimes(start, 5)
@@ -132,6 +151,23 @@ func TestNextPingTimesConvergeThenAlign(t *testing.T) {
 	}
 }
 
+func TestNextPingTimesSpreadDailyMidnightTarget(t *testing.T) {
+	planner := mustPlanner(t, []string{"0 0 * * *"}, 240)
+	start := time.Date(2026, 9, 9, 0, 0, 0, 0, time.Local)
+	plans := planner.NextPingTimes(start, 4)
+	wantPings := []time.Time{
+		time.Date(2026, 9, 9, 1, 0, 0, 0, time.Local),
+		time.Date(2026, 9, 9, 7, 0, 0, 0, time.Local),
+		time.Date(2026, 9, 9, 13, 0, 0, 0, time.Local),
+		time.Date(2026, 9, 9, 19, 0, 0, 0, time.Local),
+	}
+	for i, want := range wantPings {
+		if !plans[i].PingAt.Equal(want) {
+			t.Fatalf("plan[%d].PingAt = %s, want %s; plans=%v", i, plans[i].PingAt, want, plans)
+		}
+	}
+}
+
 func TestUpcomingUsesRunningWindow(t *testing.T) {
 	planner := mustPlanner(t, []string{"0 0 * * *"}, DefaultMaxDelayMinutes)
 	now := time.Date(2026, 9, 7, 8, 0, 0, 0, time.Local)
@@ -153,9 +189,9 @@ func TestUpcomingNormalizesPersistedUTCLastPing(t *testing.T) {
 	lastPingLocal := time.Date(2026, 9, 8, 10, 41, 0, 0, time.Local)
 	lastPingUTC := lastPingLocal.UTC()
 
-	plans := planner.Upcoming(now, &lastPingUTC, 3)
-	if len(plans) != 3 {
-		t.Fatalf("want 3 plans, got %d", len(plans))
+	plans := planner.Upcoming(now, &lastPingUTC, 5)
+	if len(plans) != 5 {
+		t.Fatalf("want 5 plans, got %d", len(plans))
 	}
 	wantPing := time.Date(2026, 9, 8, 19, 0, 0, 0, time.Local)
 	wantRefresh := time.Date(2026, 9, 9, 0, 0, 0, 0, time.Local)
@@ -164,6 +200,10 @@ func TestUpcomingNormalizesPersistedUTCLastPing(t *testing.T) {
 	}
 	if plans[0].PingAt.Location() != time.Local || plans[0].RefreshAt.Location() != time.Local {
 		t.Fatalf("plan should use local timezone, got ping=%s refresh=%s", plans[0].PingAt.Location(), plans[0].RefreshAt.Location())
+	}
+	wantNextPing := time.Date(2026, 9, 9, 1, 0, 0, 0, time.Local)
+	if !plans[1].PingAt.Equal(wantNextPing) {
+		t.Fatalf("plan[1].PingAt = %s, want smoothed next ping %s", plans[1].PingAt, wantNextPing)
 	}
 }
 
