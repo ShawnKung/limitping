@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ShawnKung/limitping/internal/align"
 	"github.com/ShawnKung/limitping/internal/usage"
 )
 
@@ -70,6 +71,36 @@ func TestPingUntilAnchoredFlag(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "--until-anchored") {
 		t.Fatalf("ping help missing --until-anchored:\n%s", out.String())
+	}
+}
+
+func TestPlannerForUntilAnchoredMetrics(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := align.Save(&align.Config{Targets: []align.Target{{
+		ID:              "123456abcdef",
+		Cron:            "0 0 * * *",
+		MaxDelayMinutes: 90,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	planner, err := plannerForPing(pingParams{
+		untilAnchored: true,
+		pushEndpoint:  "http://push.example:9091",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planner == nil || !planner.HasTargets() {
+		t.Fatal("expected --until-anchored metric push to load align targets")
+	}
+
+	planner, err = plannerForPing(pingParams{untilAnchored: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planner != nil {
+		t.Fatal("expected --until-anchored without metric push to skip align config")
 	}
 }
 
