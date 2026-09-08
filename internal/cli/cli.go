@@ -180,6 +180,7 @@ func newPingCmd(options *globalOptions) *cobra.Command {
 	var dryRun bool
 	var ifFull bool
 	var withoutAlign bool
+	var untilAnchored bool
 	cmd := &cobra.Command{
 		Use:     "ping",
 		Aliases: []string{"p"},
@@ -187,16 +188,18 @@ func newPingCmd(options *globalOptions) *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return executePing(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), pingParams{
-				dryRun:       dryRun,
-				ifFull:       ifFull,
-				withoutAlign: withoutAlign,
-				pushEndpoint: options.pushMetric,
+				dryRun:        dryRun,
+				ifFull:        ifFull,
+				withoutAlign:  withoutAlign,
+				untilAnchored: untilAnchored,
+				pushEndpoint:  options.pushMetric,
 			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "只打印将执行的命令")
 	cmd.Flags().BoolVar(&ifFull, "if-5h-full", false, "仅在 5h 可用额度为 100% 时执行；默认会结合已配置的 cron 目标做相位对齐（见 align 子命令），仅在满额且到达对齐时间后才 ping")
 	cmd.Flags().BoolVar(&withoutAlign, "without-align", false, "关闭相位对齐，只保留满额判断（满额即 ping）；仅在配合 --if-5h-full 时有意义")
+	cmd.Flags().BoolVar(&untilAnchored, "until-anchored", false, "持续 ping 直到 5h 窗口开始计时：起始输入较大，每轮翻倍，每次 ping 后回读用量确认是否已锚定；与 --if-5h-full/--without-align 互斥使用")
 	return cmd
 }
 
@@ -272,13 +275,25 @@ func localizeHelpFlags(cmd *cobra.Command) {
 }
 
 type pingParams struct {
-	dryRun       bool
-	ifFull       bool
-	withoutAlign bool
-	pushEndpoint string
+	dryRun        bool
+	ifFull        bool
+	withoutAlign  bool
+	untilAnchored bool
+	pushEndpoint  string
 }
 
+// ping until-anchored 模式的参数：从一个较大的起始长度出发，每轮把 prompt 长度翻倍，
+// 每次 ping 后等待片刻再检查 5h 窗口是否已开始计时，直到计时或到达轮数上限。
+const (
+	pingAnchorStartRunes = 2000
+	pingAnchorMaxRounds  = 6
+	pingAnchorCheckDelay = 15 * time.Second
+)
+
 func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, params pingParams) error {
+	if params.untilAnchored {
+		return executePingUntilAnchored(ctx, stdout, stderr, params)
+	}
 	dryRun := params.dryRun
 	ifFull := params.ifFull
 	pushEndpoint := params.pushEndpoint
@@ -375,6 +390,94 @@ func executePing(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		return fmt.Errorf("ping 失败: %w", pingErr)
 	}
 	return wrapStateError(stateErr)
+}
+
+// executePingUntilAnchored 持续发送 ping 直到 5h 窗口开始计时（被首次使用锚定）。
+//
+// 极小的 ping 未必能立刻让窗口进入计时，且窗口是否计时无法从单次调用即时得知，
+// 需要回读用量确认。为提高单轮成功率同时避免一开始就发过大的请求，这里从一个较大的
+// 起始 prompt 长度出发，每轮把长度翻倍，逐步增加单次消耗；每次 ping 后等待片刻再回读
+// 用量，一旦检测到窗口在计时立即停止，或到达轮数上限后停止。
+func executePingUntilAnchored(ctx context.Context, stdout, stderr io.Writer, params pingParams) error {
+	if snapshot, err := readUsage(ctx); err == nil {
+		if window := snapshot.FiveHour; window != nil && window.Active {
+			fmt.Fprintln(stdout, "5h 窗口已在计时，无需 ping。")
+			return maybePush(ctx, stdout, snapshot, params, false, nil)
+		}
+	}
+
+	model, err := models.Weakest(ctx)
+	if err != nil {
+		return err
+	}
+
+	runes := pingAnchorStartRunes
+	for round := 1; round <= pingAnchorMaxRounds; round++ {
+		prompt := anchorPrompt(runes)
+		fmt.Fprintf(stdout, "第 %d 轮：发送 ping（输入约 %d 字符，模型 %s）...\n", round, len([]rune(prompt)), model)
+		if params.dryRun {
+			fmt.Fprintf(stdout, "将执行: codex exec -m %s -c model_reasoning_effort=low -（stdin 输入约 %d 字符）\n", model, runes)
+		} else {
+			if err := runAnchorPing(ctx, stdout, stderr, model, prompt); err != nil {
+				return fmt.Errorf("第 %d 轮 ping 失败: %w", round, err)
+			}
+			_ = pingstate.Record(time.Now())
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(pingAnchorCheckDelay):
+			}
+		}
+
+		snapshot, err := readUsage(ctx)
+		if err != nil {
+			return fmt.Errorf("回读 5h 用量: %w", err)
+		}
+		window := snapshot.FiveHour
+		if params.dryRun {
+			fmt.Fprintln(stdout, "dry-run：跳过实际 ping 与锚定检查。")
+			return maybePush(ctx, stdout, snapshot, params, false, nil)
+		}
+		if window != nil && window.Active {
+			fmt.Fprintf(stdout, "5h 窗口已开始计时，%s 后重置。\n", formatDurationCN(time.Duration(window.RemainingSeconds)*time.Second))
+			return maybePush(ctx, stdout, snapshot, params, true, nil)
+		}
+		fmt.Fprintln(stdout, "窗口尚未开始计时，加大输入后重试。")
+		runes *= 2
+	}
+
+	return fmt.Errorf("已尝试 %d 轮仍未观察到 5h 窗口开始计时", pingAnchorMaxRounds)
+}
+
+// anchorPrompt 生成指定长度的输入，用重复段落放大输入 token，并要求模型只做最小回复。
+func anchorPrompt(runes int) string {
+	const seg = "分布式限流滚动窗口令牌桶漏桶共识算法幂等背压。"
+	if runes < 1 {
+		runes = 1
+	}
+	segRunes := []rune(seg)
+	body := make([]rune, 0, runes)
+	for len(body) < runes {
+		body = append(body, segRunes...)
+	}
+	body = body[:runes]
+	return "这是背景资料，只需回复两个字「已读」，不要复述：\n" + string(body)
+}
+
+// runAnchorPing 通过 stdin 把长输入喂给 codex exec，避免超长命令行参数。
+func runAnchorPing(ctx context.Context, stdout, stderr io.Writer, model, prompt string) error {
+	cmd := exec.CommandContext(ctx, "codex", "exec", "-m", model, "-c", "model_reasoning_effort=low", "-")
+	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	return cmd.Run()
+}
+
+// maybePush 在配置了 --push-metric 时推送快照，否则直接返回。
+func maybePush(ctx context.Context, stdout io.Writer, snapshot *usage.Snapshot, params pingParams, pingCompleted bool, planner *align.Planner) error {
+	if params.pushEndpoint == "" {
+		return nil
+	}
+	return pushSnapshot(ctx, stdout, snapshot, 0, params.pushEndpoint, params.dryRun, pingCompleted, planner)
 }
 
 func pushSnapshot(ctx context.Context, out io.Writer, snapshot *usage.Snapshot, collectionDuration time.Duration, endpoint string, dryRun, pingCompleted bool, planner *align.Planner) error {

@@ -227,6 +227,10 @@ func classifyWindows(rate rateLimit, now time.Time) (five, weekly *Window) {
 	return five, weekly
 }
 
+// windowCountingSlackSeconds 容忍占位值因亚秒截断带来的偏差：窗口尚未开始计时时，
+// 计算出的 remaining 约等于整段窗口长度（或少 1 秒）。
+const windowCountingSlackSeconds = 5
+
 func makeWindow(raw backendWindow, now time.Time) *Window {
 	remaining := int64(0)
 	reset := ""
@@ -235,10 +239,10 @@ func makeWindow(raw backendWindow, now time.Time) *Window {
 		resetTime := time.Unix(raw.ResetAt, 0)
 		reset = resetTime.Format(time.RFC3339)
 		remaining = int64(resetTime.Sub(now).Seconds())
-		active = raw.UsedPercent > 0 && resetTime.After(now)
 		if remaining < 0 {
 			remaining = 0
 		}
+		active = resetTime.After(now) && windowCounting(raw.UsedPercent, remaining, raw.LimitWindowSeconds)
 	}
 	remainingPercent := 100 - raw.UsedPercent
 	if remainingPercent < 0 {
@@ -248,6 +252,23 @@ func makeWindow(raw backendWindow, now time.Time) *Window {
 		UsedPercent: raw.UsedPercent, RemainingPercent: remainingPercent, Active: active,
 		ResetsAt: reset, RemainingSeconds: remaining, WindowSeconds: raw.LimitWindowSeconds,
 	}
+}
+
+// windowCounting 判断滚动窗口是否已经开始倒计时（即已被首次使用锚定）。
+//
+// 后端在窗口尚未被使用时，reset_at 会返回“假设此刻起算、整段窗口之后到期”的滚动
+// 占位值，此时 remaining 恒等于窗口长度且 used_percent 取整为 0；窗口一旦被首次
+// 请求锚定，reset_at 冻结，remaining 随之低于窗口长度。因此只要满足以下任一条件即
+// 认为窗口在计时：used_percent 已经能反映出非零消耗，或 remaining 明显小于窗口长度
+// （用 slack 容忍占位值的亚秒截断）。windowSeconds 缺失时退回到 used_percent 判据。
+func windowCounting(usedPercent float64, remainingSeconds int64, windowSeconds int) bool {
+	if usedPercent > 0 {
+		return true
+	}
+	if windowSeconds <= 0 {
+		return false
+	}
+	return remainingSeconds < int64(windowSeconds)-windowCountingSlackSeconds
 }
 
 func usageURL(base string) string {

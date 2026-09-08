@@ -53,6 +53,26 @@ func TestShellJoin(t *testing.T) {
 	}
 }
 
+func TestAnchorPromptLength(t *testing.T) {
+	for _, n := range []int{1, 100, 2000, 4000} {
+		prompt := anchorPrompt(n)
+		body := strings.TrimPrefix(prompt, "这是背景资料，只需回复两个字「已读」，不要复述：\n")
+		if got := len([]rune(body)); got != n {
+			t.Fatalf("anchorPrompt(%d) body runes = %d", n, got)
+		}
+	}
+}
+
+func TestPingUntilAnchoredFlag(t *testing.T) {
+	var out bytes.Buffer
+	if err := Run([]string{"ping", "--help"}, strings.NewReader(""), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "--until-anchored") {
+		t.Fatalf("ping help missing --until-anchored:\n%s", out.String())
+	}
+}
+
 func TestCobraHelp(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run([]string{"--help"}, strings.NewReader(""), &out, &out); err != nil {
