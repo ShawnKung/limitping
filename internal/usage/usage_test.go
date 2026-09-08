@@ -30,6 +30,35 @@ func TestClassifyWindowsByDuration(t *testing.T) {
 	}
 }
 
+func TestWindowActiveByCounting(t *testing.T) {
+	const window = 18000
+	now := time.Unix(100000, 0)
+
+	// 未被使用、reset_at 为“此刻起算整段窗口后到期”的滚动占位：remaining≈window，应视为未计时。
+	placeholder := makeWindow(backendWindow{UsedPercent: 0, LimitWindowSeconds: window, ResetAt: now.Unix() + window}, now)
+	if placeholder.Active {
+		t.Fatalf("placeholder window should be inactive: %#v", placeholder)
+	}
+
+	// used_percent 取整为 0，但 reset_at 已冻结、remaining 明显小于窗口长度：应视为已计时。
+	counting := makeWindow(backendWindow{UsedPercent: 0, LimitWindowSeconds: window, ResetAt: now.Unix() + window - 600}, now)
+	if !counting.Active {
+		t.Fatalf("counting window with frozen reset should be active: %#v", counting)
+	}
+
+	// used_percent > 0 时无条件视为已计时。
+	used := makeWindow(backendWindow{UsedPercent: 3, LimitWindowSeconds: window, ResetAt: now.Unix() + window}, now)
+	if !used.Active {
+		t.Fatalf("window with non-zero usage should be active: %#v", used)
+	}
+
+	// reset_at 已过期：无论如何都视为未生效。
+	expired := makeWindow(backendWindow{UsedPercent: 50, LimitWindowSeconds: window, ResetAt: now.Unix() - 10}, now)
+	if expired.Active {
+		t.Fatalf("expired window should be inactive: %#v", expired)
+	}
+}
+
 func TestUsageURL(t *testing.T) {
 	if got := usageURL("https://chatgpt.com/backend-api"); got != "https://chatgpt.com/backend-api/wham/usage" {
 		t.Fatalf("got %q", got)
