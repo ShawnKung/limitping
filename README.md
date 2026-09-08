@@ -41,6 +41,7 @@ CCLimitPing；如果只需要一个可嵌入现有 cron/plist/监控体系的 Co
 - `--dry-run` 在执行模型调用或推送指标前预览操作。
 - `--if-5h-full` 只在 5 小时额度恢复到 100% 时执行 ping；此时默认还会结合已配置的 cron 目标做相位对齐：仅在满额且到达对齐时间后才 ping（指标仍正常上报）。
 - `--without-align` 关闭相位对齐，只保留满额判断（满额即 ping）；仅在配合 `--if-5h-full` 时有意义。不带任何 flag 时 `ping` 立即执行，与对齐无关。
+- `--until-anchored` 持续 ping 直到 5 小时窗口开始计时（被首次使用锚定）：起始输入较大，每轮翻倍，每次 ping 后回读用量确认是否已计时，计时后立即停止。
 - `align` 子命令管理多条 cron 目标（每条带唯一 id 和自己的延时预算 max-delay，可按 id 单独删除），并预览未来的 ping/刷新时间。
 - 将用量、重置券数量和最近成功 ping 时间推送到 Pushgateway。
 - 成功 ping 时间持久化，后续上报不会被 `ping_completed=0` 覆盖。
@@ -107,6 +108,7 @@ limitping ping --dry-run
 limitping ping
 limitping ping --if-5h-full
 limitping ping --if-5h-full --without-align
+limitping ping --until-anchored
 limitping align add "0 0 * * *"
 limitping align list
 limitping align preview --count 5
@@ -125,6 +127,32 @@ codex exec -m <model> -c model_reasoning_effort=low ping
 退出；如果同时设置了 `--push-metric`，仍会推送最新用量，并将本次
 `limitping_ping_completed` 记为 `0`。满足满额条件后，默认还会做相位对齐（见下一节），
 只有到达对齐时间才真正 ping；加 `--without-align` 可关闭对齐，恢复“满额即 ping”。
+
+### 窗口是否已计时（active 判定）
+
+Codex 的 5 小时滚动窗口按“重置后首次使用”锚定：窗口尚未被使用时，接口返回的
+`reset_at` 是“假设此刻起算、整段窗口之后到期”的滚动占位值，此时 `remaining` 恒等于
+窗口长度、`used_percent` 取整为 0；一旦被首次请求锚定，`reset_at` 冻结、`remaining`
+随之低于窗口长度。因此 `status`/指标中的窗口 `active` 判定为：`used_percent > 0`，或
+`remaining` 已明显小于窗口长度（即 `reset_at` 已冻结）——只要满足其一，就表示窗口已开始
+计时。这样即使一次很轻的 ping 消耗不足 1%、`used_percent` 仍显示 0，也能正确反映窗口
+已被锚定。
+
+### 让窗口开始计时（`--until-anchored`）
+
+若你想在额度满时主动把 5 小时窗口“打着”，让它从此刻开始倒数（这样稍后来用时可以少等
+一截），使用 `limitping ping --until-anchored`：
+
+```sh
+limitping ping --until-anchored
+```
+
+它会先回读用量，若窗口已在计时则直接结束；否则从一个较大的起始输入出发发送 ping，每轮
+把输入长度翻倍以逐步增加单次消耗，每次 ping 后等待片刻再回读用量，一旦检测到窗口开始
+计时立即停止，或到达轮数上限后停止。`--dry-run` 只打印将执行的命令而不实际调用。
+
+窗口锚定机制、`active` 判定与该命令的更多细节见
+[docs/five-hour-window-anchoring.md](docs/five-hour-window-anchoring.md)。
 
 ## 刷新时间对齐（`--if-5h-full` 默认开启）
 
