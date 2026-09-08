@@ -32,7 +32,10 @@ type Decision struct {
 	Target time.Time
 	// Anchor 是理想的 ping 锚点 A* = T - Window，在此锚定可使窗口于 T 重置。
 	Anchor time.Time
-	// Delay 是从现在到锚点还需等待的时长（Hold 时为正，Ping 时约为 0 或不适用）。
+	// PlannedPing 是本轮满额窗口应执行 ping 的时间。它可能早于最终锚点，
+	// 用于把对齐目标前的总等待时间均匀摊到多个窗口里。
+	PlannedPing time.Time
+	// Delay 是从现在到本轮计划 ping 还需等待的时长（Hold 时为正，Ping 时约为 0 或不适用）。
 	Delay time.Duration
 	// MaxDelay 是本次瞄准目标自己的延时预算。
 	MaxDelay time.Duration
@@ -78,36 +81,57 @@ func (p *Planner) HasTargets() bool {
 	return len(p.targets) > 0
 }
 
-// Decide 在窗口满额的前提下，判断此刻应 ping 还是 hold 延后。判定是无状态的，
-// 仅依赖当前时间与 cron 目标：延后中的每一分钟都会重新评估，随着时间逼近锚点，
-// 待等时长单调减小，绝不会超过预算。每个目标使用它自己的延时预算。
+// Decide 在窗口满额的前提下，判断此刻应 ping 还是 hold 延后。
+// 调用方若知道当前窗口的满额起点，应优先使用 DecideAtFull 或 DecideFromLastPing，
+// 避免均匀摊分计划在反复轮询时漂移。每个目标使用它自己的延时预算。
 func (p *Planner) Decide(now time.Time) Decision {
+	return p.DecideAtFull(now, now)
+}
+
+// DecideFromLastPing 基于最近一次成功 ping 推导当前窗口满额起点，再做对齐决策。
+// 这样 cron 每分钟重试时会围绕同一个满额起点稳定计算本轮计划 ping 时间。
+func (p *Planner) DecideFromLastPing(now time.Time, lastPing *time.Time) Decision {
+	now = now.In(time.Local)
+	full := now
+	if lastPing != nil {
+		nextFull := lastPing.In(time.Local).Add(p.window)
+		if !nextFull.After(now) {
+			full = nextFull
+		}
+	}
+	return p.DecideAtFull(full, now)
+}
+
+// DecideAtFull 在给定窗口满额起点 full 的前提下，判断 now 是否应 ping。
+func (p *Planner) DecideAtFull(full, now time.Time) Decision {
+	full = full.In(time.Local)
 	now = now.In(time.Local)
 	if len(p.targets) == 0 {
 		return Decision{Action: ActionPing, Now: now, Reason: "未配置对齐目标，满额即 ping"}
 	}
 	// 只考虑锚点仍可达（A* = T - window >= now - tol）的目标，取锚点最近的一个。
-	threshold := now.Add(p.window).Add(-p.tolerance)
+	threshold := full.Add(p.window).Add(-p.tolerance)
 	target, maxDelay, ok := p.nextOnOrAfter(threshold)
 	if !ok {
 		return Decision{Action: ActionPing, Now: now, Reason: "无可用 cron 目标，满额即 ping"}
 	}
 	anchor := target.Add(-p.window)
-	delay := anchor.Sub(now)
-	base := Decision{Now: now, HasTarget: true, Target: target, Anchor: anchor, Delay: delay, MaxDelay: maxDelay}
+	plannedPing, feasible := p.plannedPingAt(full, anchor, maxDelay)
+	delay := plannedPing.Sub(now)
+	base := Decision{Now: now, HasTarget: true, Target: target, Anchor: anchor, PlannedPing: plannedPing, Delay: delay, MaxDelay: maxDelay}
 	switch {
-	case delay > maxDelay:
+	case !feasible:
 		base.Action = ActionPing
-		base.Reason = fmt.Sprintf("距目标锚点还有 %s，超过延时预算 %s，正常链式 ping",
-			roundDuration(delay), roundDuration(maxDelay))
+		base.Reason = fmt.Sprintf("距目标锚点还需累计等待 %s，超过延时预算 %s，正常链式 ping",
+			roundDuration(anchor.Sub(full)), roundDuration(maxDelay))
 	case delay <= p.tolerance:
 		base.Action = ActionPing
-		base.Reason = fmt.Sprintf("已到目标锚点，ping 使窗口约在 %s 重置",
-			target.Format("01-02 15:04"))
+		base.Reason = fmt.Sprintf("已到本轮计划点，ping 使窗口约在 %s 重置",
+			plannedPing.Add(p.window).Format("01-02 15:04"))
 	default:
 		base.Action = ActionHold
-		base.Reason = fmt.Sprintf("在预算内延后：等到 %s 再 ping，使窗口约在 %s 重置",
-			anchor.Format("01-02 15:04"), target.Format("01-02 15:04"))
+		base.Reason = fmt.Sprintf("均匀延后：等到 %s 再 ping，逐步对齐 %s 刷新",
+			plannedPing.Format("01-02 15:04"), target.Format("01-02 15:04"))
 	}
 	return base
 }
@@ -131,10 +155,10 @@ func (p *Planner) NextPingTimes(start time.Time, n int) []PingPlan {
 	plans := make([]PingPlan, 0, n)
 	full := start.In(time.Local)
 	for i := 0; i < n; i++ {
-		decision := p.Decide(full)
+		decision := p.DecideAtFull(full, full)
 		pingAt := full
 		if decision.Action == ActionHold {
-			pingAt = decision.Anchor
+			pingAt = decision.PlannedPing
 		}
 		if pingAt.Before(full) {
 			pingAt = full
@@ -143,6 +167,23 @@ func (p *Planner) NextPingTimes(start time.Time, n int) []PingPlan {
 		full = pingAt.Add(p.window)
 	}
 	return plans
+}
+
+func (p *Planner) plannedPingAt(full, anchor time.Time, maxDelay time.Duration) (time.Time, bool) {
+	untilAnchor := anchor.Sub(full)
+	if untilAnchor <= p.tolerance {
+		return full, true
+	}
+	windowsBeforeAnchor := int(untilAnchor / p.window)
+	plannedPings := windowsBeforeAnchor + 1
+	totalHold := untilAnchor - time.Duration(windowsBeforeAnchor)*p.window
+	if totalHold < 0 {
+		totalHold = 0
+	}
+	if totalHold > maxDelay*time.Duration(plannedPings) {
+		return full, false
+	}
+	return full.Add(totalHold / time.Duration(plannedPings)), true
 }
 
 // nextOnOrAfter 返回所有 cron 中不早于 t 的最近一次触发时刻，及该目标自己的延时预算。
