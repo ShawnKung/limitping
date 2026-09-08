@@ -82,6 +82,7 @@ func (p *Planner) HasTargets() bool {
 // 仅依赖当前时间与 cron 目标：延后中的每一分钟都会重新评估，随着时间逼近锚点，
 // 待等时长单调减小，绝不会超过预算。每个目标使用它自己的延时预算。
 func (p *Planner) Decide(now time.Time) Decision {
+	now = now.In(time.Local)
 	if len(p.targets) == 0 {
 		return Decision{Action: ActionPing, Now: now, Reason: "未配置对齐目标，满额即 ping"}
 	}
@@ -128,7 +129,7 @@ func (p *Planner) Upcoming(now time.Time, lastPing *time.Time, n int) []PingPlan
 // 模拟假设每次 ping 后窗口在 window 后再次满额（工具自身链式语义），不建模真实使用。
 func (p *Planner) NextPingTimes(start time.Time, n int) []PingPlan {
 	plans := make([]PingPlan, 0, n)
-	full := start
+	full := start.In(time.Local)
 	for i := 0; i < n; i++ {
 		decision := p.Decide(full)
 		pingAt := full

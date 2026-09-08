@@ -143,6 +143,30 @@ func TestUpcomingUsesRunningWindow(t *testing.T) {
 	}
 }
 
+func TestUpcomingNormalizesPersistedUTCLastPing(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("UTC+8", 8*60*60)
+	t.Cleanup(func() { time.Local = originalLocal })
+
+	planner := mustPlanner(t, []string{"0 0 * * *"}, 300)
+	now := time.Date(2026, 9, 8, 11, 40, 0, 0, time.Local)
+	lastPingLocal := time.Date(2026, 9, 8, 10, 41, 0, 0, time.Local)
+	lastPingUTC := lastPingLocal.UTC()
+
+	plans := planner.Upcoming(now, &lastPingUTC, 3)
+	if len(plans) != 3 {
+		t.Fatalf("want 3 plans, got %d", len(plans))
+	}
+	wantPing := time.Date(2026, 9, 8, 19, 0, 0, 0, time.Local)
+	wantRefresh := time.Date(2026, 9, 9, 0, 0, 0, 0, time.Local)
+	if !plans[0].PingAt.Equal(wantPing) || !plans[0].RefreshAt.Equal(wantRefresh) {
+		t.Fatalf("plan[0] = %+v, want ping %s refresh %s", plans[0], wantPing, wantRefresh)
+	}
+	if plans[0].PingAt.Location() != time.Local || plans[0].RefreshAt.Location() != time.Local {
+		t.Fatalf("plan should use local timezone, got ping=%s refresh=%s", plans[0].PingAt.Location(), plans[0].RefreshAt.Location())
+	}
+}
+
 func TestParseCronRejectsInvalid(t *testing.T) {
 	if _, err := ParseCron("not a cron"); err == nil {
 		t.Fatal("expected error for invalid cron")
